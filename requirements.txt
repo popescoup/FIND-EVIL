@@ -1,0 +1,17 @@
+# MABE Detector — SIFT dependencies
+# ===================================
+# Install from detector-sift/:
+#   pip install -r requirements.txt
+#
+# Optional — LLM narrative enhancement:
+#   pip install anthropic
+# Requires ANTHROPIC_API_KEY environment variable.
+# The detector runs fully without it; LLM narrative
+# is a cosmetic enhancement enabled via --llm-narrative.
+
+# Core — required for all modes
+pyyaml>=6.0
+
+# Optional — LLM narrative enhancement
+# Uncomment to install, or install separately:
+# anthropic>=0.40.0
