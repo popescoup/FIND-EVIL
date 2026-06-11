@@ -572,28 +572,31 @@ class PrivEscMechanism:
     ) -> list[EvidenceRef]:
         evidence: list[EvidenceRef] = []
 
+        idx = 0
         for e in hv_events[:2]:
             ts = e.get("timestamp", "")
             dst = e.get("dst_host") or e.get("dest", "")
             nt = self._classifier.classify_event(e)
             evidence.append(EvidenceRef(
-                event_id=f"{e.get('session_id', '')}:{ts}",
+                event_id=f"{e.get('session_id', '')}:{ts}:{idx}",
                 timestamp=ts,
                 event_type=e.get("event_type", "unknown"),
                 significance=f"successful auth to high-privilege node type: {nt} ({dst})",
                 inline=e,
             ))
+            idx += 1
 
         if highest_layer >= 2:
             for e in harvest_events[:2]:
                 ts = e.get("timestamp", "")
                 evidence.append(EvidenceRef(
-                    event_id=f"{e.get('session_id', '')}:{ts}",
+                    event_id=f"{e.get('session_id', '')}:{ts}:{idx}",
                     timestamp=ts,
                     event_type=e.get("event_type", "unknown"),
                     significance="credential access indicator preceding privilege escalation",
                     inline=e,
                 ))
+                idx += 1
 
         return evidence[:5]
 

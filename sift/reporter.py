@@ -116,7 +116,7 @@ MECHANISM_DISPLAY_NAMES = {
 }
 
 # Confidence thresholds for badge text in report headers
-_BADGE_HIGH   = 0.75
+_BADGE_HIGH   = 0.55
 _BADGE_MEDIUM = 0.50
 _BADGE_LOW    = 0.35   # == alert threshold
 

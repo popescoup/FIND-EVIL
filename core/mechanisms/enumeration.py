@@ -460,17 +460,19 @@ class EnumerationMechanism:
                 self._classifier.classify_event(e)
             )
         ]
+        idx = 0
         for e in hv_events[:3]:
             ts = e.get("timestamp", "")
             dst = e.get("dst_host") or e.get("dest", "")
             nt = self._classifier.classify_event(e)
             evidence.append(EvidenceRef(
-                event_id=f"{e.get('session_id', '')}:{ts}",
+                event_id=f"{e.get('session_id', '')}:{ts}:{idx}",
                 timestamp=ts,
                 event_type=e.get("event_type", "unknown"),
                 significance=f"access to high-value node type: {nt} ({dst})",
                 inline=e,
             ))
+            idx += 1
 
         # Auth attempts to new (unseen) destinations
         if highest_layer >= 3:
@@ -483,12 +485,13 @@ class EnumerationMechanism:
                 ts = e.get("timestamp", "")
                 dst = e.get("dst_host") or e.get("dest", "")
                 evidence.append(EvidenceRef(
-                    event_id=f"{e.get('session_id', '')}:{ts}",
+                    event_id=f"{e.get('session_id', '')}:{ts}:{idx}",
                     timestamp=ts,
                     event_type="auth_attempt",
                     significance=f"successful auth to {dst}",
                     inline=e,
                 ))
+                idx += 1
 
         return evidence[:5]
 
