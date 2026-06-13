@@ -24,3 +24,8 @@ build/
 
 # Reports
 reports/
+
+# MABE
+mabe/output/
+mabe/vocabulary.json
+mabe_explorer.html
