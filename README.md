@@ -78,32 +78,18 @@ MABE Detector Core
 
 ---
 
-## Quick Start (5 steps)
+## Quick Start (3 steps)
 
 **Prerequisites:** SANS SIFT Workstation, Python 3.10+, Claude Code installed,
 `ANTHROPIC_API_KEY` set.
 
 ```bash
-# 1. Install dependencies
+# 1. Set your API key and run setup (handles everything)
 cd /opt/detector-sift
-pip install -r requirements.txt
-
-# 2. Run setup
+export ANTHROPIC_API_KEY=your_key_here
 bash setup.sh
 
-# 3. Set API key
-export ANTHROPIC_API_KEY=your_key_here
-
-# 4. Create case directory and copy CLAUDE.md
-mkdir -p /cases/mabe-investigation/reports
-mkdir -p /cases/mabe-investigation/analysis
-cp /opt/detector-sift/case/CLAUDE.md /cases/mabe-investigation/CLAUDE.md
-
-# 5. Install the detection skill and open the case
-mkdir -p /root/.claude/skills/ai-attack-detection
-cp /opt/detector-sift/skills/ai-attack-detection/SKILL.md \
-   /root/.claude/skills/ai-attack-detection/SKILL.md
-
+# 2. Open the case
 cd /cases/mabe-investigation && claude
 ```
 
@@ -113,9 +99,15 @@ When the Claude Code prompt appears, type:
 begin
 ```
 
-Claude Code reads the CLAUDE.md, starts the MCP server, runs detection
-across all 1,425 sessions, and enters the investigation loop — no further
-human input required until the action prompts.
+Claude Code runs Phase 1 (detection across all 1,425 sessions) fully
+autonomously and prints the alerted account list. When it stops, open
+a second SSH terminal and run:
+
+```bash
+bash /cases/mabe-investigation/run_phase2.sh
+```
+
+The triage queue lets you select which accounts to investigate interactively.
 
 ---
 

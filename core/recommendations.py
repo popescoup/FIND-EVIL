@@ -1,7 +1,7 @@
 """
 MABE Detector — Recommendation Engine
 =======================================
-Version: 1.0.0
+Version: 1.1.0
 
 Fully deterministic. No LLM. Maps CorrelationOutput signal data to a
 prioritized list of Recommendation objects. The recommendations drive both
@@ -14,6 +14,24 @@ Priority levels:
     1 = immediate  — run before anything else
     2 = important  — run after priority 1 actions
     3 = supplementary — always-add baseline coverage
+
+TOOL COMPATIBILITY NOTE
+-----------------------
+EvtxECmd, log2timeline, and YARA are designed for native Windows EVTX
+binary files and on-disk artifacts. MABE produces JSON event exports
+(security_events.json / sysmon_events.json) which these tools cannot
+ingest directly.
+
+In real-world deployments these tools work against native EVTX evidence.
+In MABE deployments the MCP tools (get_account_sessions, run_batch_detection)
+provide equivalent structured analysis of the JSON event data.
+
+Recommendations that require native EVTX are marked:
+    status="NEEDS NATIVE EVTX"
+    requires_disk_image=True
+
+This ensures the investigation loop displays them honestly rather than
+failing silently.
 """
 
 from __future__ import annotations
@@ -29,6 +47,7 @@ from core.schema import (
     MECHANISM_PRIV_ESC,
 )
 
+# YARA rules ship with the detector — path relative to detector root
 YARA_RULES_PATH = "/opt/detector-sift/detector_mcp/yara_rules/attack_framework.yar"
 
 
@@ -46,7 +65,7 @@ class Recommendation:
     command_template: str     # shell command or "mcp:{function_name}"
     requires_disk_image: bool
     priority: int             # 1=immediate, 2=important, 3=supplementary
-    status: str               # "READY" or "NEEDS DISK IMAGE"
+    status: str               # "READY", "NEEDS NATIVE EVTX", "NEEDS DISK IMAGE"
 
 
 # ---------------------------------------------------------------------------
@@ -117,48 +136,70 @@ def generate_recommendations(
             pe_signals = {s.name: s for s in pe_summary.top_signals}
             pe_events  = pe_summary.top_events
 
-            # Kerberos TGT + fast escalation → EvtxECmd
+            # Kerberos TGT + fast escalation → MCP cross-session analysis
+            # (EvtxECmd listed as reference for real-world EVTX deployments)
             has_kerberos = any(
                 e.event_type == "kerberos_tgt_request" for e in pe_events
             )
             delta_signal = pe_signals.get("harvest_to_escalation_delta_s")
             if has_kerberos and delta_signal and delta_signal.observed < 60:
                 delta = delta_signal.observed
+
+                # MCP-based Kerberos analysis (works with MABE JSON)
                 _add(Recommendation(
                     id=_next_id(),
-                    title="Extract Kerberos ticket activity from domain controllers",
+                    title="Correlate Kerberos activity across all account sessions",
                     basis=f"Kerberos TGT request {delta:.1f}s before domain controller auth",
-                    tool="EvtxECmd",
-                    skill="windows-artifacts",
-                    command_template=(
-                        f"dotnet /opt/zimmermantools/net9/EvtxeCmd/EvtxECmd.dll "
-                        f"-f {bundle}/security_events.json "
-                        f"--csv {analysis}/ --csvf kerberos_{sid8}.csv"
-                    ),
+                    tool="MABE Detector MCP",
+                    skill=None,
+                    command_template="mcp:get_account_sessions",
                     requires_disk_image=False,
                     priority=1,
                     status="READY",
                 ))
 
-            # Deep credential chain → log2timeline
+                # EvtxECmd reference recommendation (real-world EVTX only)
+                _add(Recommendation(
+                    id=_next_id(),
+                    title="[Real-world] Extract Kerberos tickets via EvtxECmd",
+                    basis=(
+                        f"Kerberos TGT request {delta:.1f}s before DC auth — "
+                        f"requires native EVTX files, not MABE JSON bundles"
+                    ),
+                    tool="EvtxECmd",
+                    skill="windows-artifacts",
+                    command_template=(
+                        f"dotnet /opt/zimmermantools/net9/EvtxeCmd/EvtxECmd.dll "
+                        f"-f <path_to_Security.evtx> "
+                        f"--csv {analysis}/ --csvf kerberos_{sid8}.csv"
+                    ),
+                    requires_disk_image=True,
+                    priority=2,
+                    status="NEEDS NATIVE EVTX",
+                ))
+
+            # Deep credential chain → log2timeline (real-world only)
             depth_signal = pe_signals.get("chain_depth")
             if depth_signal and depth_signal.observed >= 2:
                 depth = depth_signal.observed
                 _add(Recommendation(
                     id=_next_id(),
-                    title="Reconstruct full privilege escalation timeline",
-                    basis=f"Credential chain reached {depth:.0f} privilege level(s)",
+                    title="[Real-world] Reconstruct privilege escalation timeline",
+                    basis=(
+                        f"Credential chain reached {depth:.0f} privilege level(s) — "
+                        f"requires native EVTX files, not MABE JSON bundles"
+                    ),
                     tool="log2timeline",
                     skill="plaso-timeline",
                     command_template=(
                         f"log2timeline.py {analysis}/{sid8}_priv.plaso "
-                        f"{bundle}/security_events.json && "
+                        f"<path_to_evtx_directory>/ && "
                         f"psort.py -o l2tcsv {analysis}/{sid8}_priv.plaso "
                         f"> {analysis}/timeline_priv_{sid8}.csv"
                     ),
-                    requires_disk_image=False,
-                    priority=1,
-                    status="READY",
+                    requires_disk_image=True,
+                    priority=2,
+                    status="NEEDS NATIVE EVTX",
                 ))
 
     # ── Enumeration branch ────────────────────────────────────────────
@@ -167,7 +208,7 @@ def generate_recommendations(
         if en_summary:
             en_signals = {s.name: s for s in en_summary.top_signals}
 
-            # Many high-value contacts → full timeline
+            # Many high-value contacts → full timeline (real-world only)
             hv_signal  = en_signals.get("high_value_node_contacts")
             seg_signal = en_signals.get("distinct_segment_count")
             if hv_signal and hv_signal.observed >= 3:
@@ -175,22 +216,23 @@ def generate_recommendations(
                 segments = int(seg_signal.observed) if seg_signal else "multiple"
                 _add(Recommendation(
                     id=_next_id(),
-                    title="Generate full session event timeline",
+                    title="[Real-world] Generate full session event timeline",
                     basis=(
                         f"{count:.0f} high-value node types contacted across "
-                        f"{segments} network segments"
+                        f"{segments} network segments — "
+                        f"requires native EVTX files, not MABE JSON bundles"
                     ),
                     tool="log2timeline",
                     skill="plaso-timeline",
                     command_template=(
                         f"log2timeline.py {analysis}/{sid8}_enum.plaso "
-                        f"{bundle}/security_events.json && "
+                        f"<path_to_evtx_directory>/ && "
                         f"psort.py -o l2tcsv {analysis}/{sid8}_enum.plaso "
                         f"> {analysis}/timeline_enum_{sid8}.csv"
                     ),
-                    requires_disk_image=False,
-                    priority=1,
-                    status="READY",
+                    requires_disk_image=True,
+                    priority=2,
+                    status="NEEDS NATIVE EVTX",
                 ))
 
             # Mostly-new hosts → cross-session MCP analysis
@@ -225,9 +267,7 @@ def generate_recommendations(
                     basis=f"Timing consistency (CV {cv:.2f}) indicates machine execution",
                     tool="yara",
                     skill="yara-hunting",
-                    command_template=(
-                        f"yara {YARA_RULES_PATH} {bundle}/"
-                    ),
+                    command_template=f"yara {YARA_RULES_PATH} {bundle}/",
                     requires_disk_image=False,
                     priority=2,
                     status="READY",
@@ -254,9 +294,7 @@ def generate_recommendations(
         basis="Standard supplementary sweep for all alerted sessions",
         tool="yara",
         skill="yara-hunting",
-        command_template=(
-            f"yara {YARA_RULES_PATH} {bundle}/"
-        ),
+        command_template=f"yara {YARA_RULES_PATH} {bundle}/",
         requires_disk_image=False,
         priority=3,
         status="READY",

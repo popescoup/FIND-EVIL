@@ -1,18 +1,27 @@
 """
 MABE Detector — Interactive Investigation Loop
 ===============================================
-Version: 1.0.0
+Version: 1.1.0
 
 The primary UX artifact for the agentic workflow. Presents the incident
 report and recommended actions in a clean terminal format, executes SIFT
 tools on demand, passes output to an LLM summarizer, and maintains a
 running investigation_notes.md for the case record.
 
+TWO PUBLIC FUNCTIONS
+--------------------
+run_triage_queue()     — presents alerted account queue, analyst selects
+                         which accounts to investigate, then runs
+                         run_investigation_loop() for each selected account
+
+run_investigation_loop() — interactive loop for one session: numbered
+                           action prompts, tool execution, LLM summaries,
+                           follow-on recommendations, notes
+
 TERMINAL AESTHETIC
 ------------------
 Uses ═══ separators for section headers, ─── for recommendation lists.
 Numbered action prompts. [NEW] markers on dynamically-added follow-ons.
-Must look like a professional tool, not a script.
 
 TOOL EXECUTION
 --------------
@@ -29,7 +38,6 @@ On any LLM failure: print raw output, continue without summary.
 INVESTIGATION NOTES
 -------------------
 investigation_notes.md is appended after each action. Never overwritten.
-Format matches the handoff spec exactly.
 """
 
 from __future__ import annotations
@@ -59,16 +67,204 @@ Be direct and specific about what the tool found or did not find.\
 
 # Follow-on keyword triggers
 _FOLLOWON_TRIGGERS = {
-    "failed logon":      ("spray_analysis", "Analyze authentication failure patterns"),
-    "4625":              ("spray_analysis", "Analyze authentication failure patterns"),
-    "4768":              ("kerberos_deep",  "Kerberos deep-dive: extract all TGT/TGS requests"),
-    "tgt":               ("kerberos_deep",  "Kerberos deep-dive: extract all TGT/TGS requests"),
-    "as-rep":            ("kerberos_deep",  "Kerberos deep-dive: extract all TGT/TGS requests"),
+    "failed logon":  ("spray_analysis", "Analyze authentication failure patterns"),
+    "4625":          ("spray_analysis", "Analyze authentication failure patterns"),
+    "4768":          ("kerberos_deep",  "Kerberos deep-dive: extract all TGT/TGS requests"),
+    "tgt":           ("kerberos_deep",  "Kerberos deep-dive: extract all TGT/TGS requests"),
+    "as-rep":        ("kerberos_deep",  "Kerberos deep-dive: extract all TGT/TGS requests"),
 }
 
 
 # ---------------------------------------------------------------------------
-# Public API
+# Public API — Triage queue
+# ---------------------------------------------------------------------------
+
+def run_triage_queue(
+    alerted_accounts: list[dict],
+    sift_output_dir: str,
+    case_analysis_dir: str,
+    case_reports_dir: str,
+    anthropic_client=None,
+) -> None:
+    """
+    Present the full alerted account queue and let the analyst select
+    which accounts to investigate interactively.
+
+    Parameters
+    ----------
+    alerted_accounts : list[dict]
+        One entry per unique alerted account, sorted by max confidence
+        descending. Each dict must have:
+            account: str
+            max_confidence: float
+            alerted_sessions: int
+            highest_session_id: str   -- UUID of highest-confidence session
+            highest_layer: str        -- e.g. "all L3"
+    sift_output_dir : str
+        Absolute path to MABE output/sift/ directory.
+    case_analysis_dir : str
+        Absolute path to analysis output directory.
+    case_reports_dir : str
+        Absolute path to reports output directory.
+    anthropic_client : anthropic.Anthropic | None
+        Pre-instantiated client, or None to init from environment.
+    """
+    from sift.runner import DetectionRunner
+    from sift.ingest import load_and_normalize, iter_normalized_sessions
+    from sift.reporter_v2 import render_report_v2
+    from core.recommendations import generate_recommendations
+
+    client = anthropic_client or _init_client()
+
+    # ── Print detection summary ───────────────────────────────────────
+    print()
+    print("=" * 60)
+    print("  MABE DETECTOR — DETECTION COMPLETE")
+    print(f"  {len(alerted_accounts)} accounts flagged across all alerted sessions")
+    print("=" * 60)
+    print()
+    print("ALERTED ACCOUNTS (sorted by max confidence):")
+    print("-" * 60)
+    for i, acct in enumerate(alerted_accounts, 1):
+        sessions_str = (
+            f"{acct['alerted_sessions']} session"
+            f"{'s' if acct['alerted_sessions'] != 1 else ''}"
+        )
+        print(
+            f"[{i:2}] {acct['account']:<22}  "
+            f"{acct['max_confidence']:.4f}  "
+            f"{sessions_str:<12}  "
+            f"{acct.get('highest_layer', '')}"
+        )
+    print("-" * 60)
+    print()
+
+    # ── Triage prompt ─────────────────────────────────────────────────
+    while True:
+        try:
+            raw = input(
+                f"Investigate accounts [1-{len(alerted_accounts)}], "
+                f"enter numbers (e.g. 1,2,5), (a)ll, or (q)uit: "
+            ).strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n  Exiting.")
+            return
+
+        if raw.lower() == "q":
+            print("  Exiting. Reports written to", case_reports_dir)
+            return
+
+        if raw.lower() == "a":
+            selected = list(range(len(alerted_accounts)))
+            break
+
+        # Parse comma-separated numbers
+        try:
+            parts = [p.strip() for p in raw.split(",") if p.strip()]
+            selected = [int(p) - 1 for p in parts]
+            if not selected:
+                raise ValueError
+            if any(i < 0 or i >= len(alerted_accounts) for i in selected):
+                print(
+                    f"  Invalid input. Enter numbers between 1 and "
+                    f"{len(alerted_accounts)}."
+                )
+                continue
+            break
+        except ValueError:
+            print(
+                f"  Invalid input. Enter numbers (e.g. 1,2,5), (a)ll, or (q)uit."
+            )
+            continue
+
+    # ── Load corpus once for baseline construction ────────────────────
+    print()
+    print("  Loading corpus for baseline construction...")
+    all_sessions = list(iter_normalized_sessions(sift_output_dir, skip_empty=True))
+    runner = DetectionRunner(alert_threshold=0.35)
+    print(f"  {len(all_sessions)} sessions loaded.")
+    print()
+
+    # ── Investigate selected accounts ─────────────────────────────────
+    for idx in selected:
+        acct = alerted_accounts[idx]
+        account = acct["account"]
+        session_id = acct["highest_session_id"]
+        session_path = f"{sift_output_dir}session_{session_id}"
+
+        print("=" * 60)
+        print(f"  INVESTIGATING: {account}")
+        print(
+            f"  Session: {session_id[:8]}...  "
+            f"| Confidence: {acct['max_confidence']:.4f}"
+        )
+        print("=" * 60)
+        print()
+
+        # Load and detect
+        try:
+            session = load_and_normalize(session_path)
+            result = runner.run_single(session, all_sessions)
+        except Exception as exc:
+            print(f"  Failed to load/detect session: {exc}")
+            continue
+
+        # Account context
+        account_data = {
+            "alerted_sessions": acct["alerted_sessions"],
+            "confidence_range": {
+                "min": acct["max_confidence"],
+                "max": acct["max_confidence"],
+            },
+            "first_seen": result.correlation.triage_card.time_window.start,
+            "last_seen":  result.correlation.triage_card.time_window.end,
+        }
+
+        # Generate recommendations
+        recs = generate_recommendations(
+            correlation_output=result.correlation,
+            session_bundle_path=session_path,
+            session_id=session_id,
+            account=account,
+            account_session_count=acct["alerted_sessions"],
+            case_analysis_dir=case_analysis_dir,
+        )
+
+        # Write report
+        report_path = Path(case_reports_dir) / f"report_{session_id[:8]}.md"
+        try:
+            render_report_v2(
+                result, recs, account_data,
+                report_path, anthropic_client=client
+            )
+            print(f"  Report: {report_path}")
+        except Exception as exc:
+            print(f"  Report generation failed: {exc}")
+
+        # Run interactive investigation loop
+        notes_path = Path(case_analysis_dir) / f"notes_{session_id[:8]}.md"
+        run_investigation_loop(
+            session_result=result,
+            recommendations=recs,
+            report_path=report_path,
+            notes_path=notes_path,
+            sift_output_dir=sift_output_dir,
+            account_data=account_data,
+            anthropic_client=client,
+        )
+
+        print()
+
+    print("=" * 60)
+    print("  INVESTIGATION COMPLETE")
+    print(f"  Reports: {case_reports_dir}")
+    print(f"  Notes:   {case_analysis_dir}")
+    print("=" * 60)
+    print()
+
+
+# ---------------------------------------------------------------------------
+# Public API — Per-session investigation loop
 # ---------------------------------------------------------------------------
 
 def run_investigation_loop(
@@ -108,7 +304,7 @@ def run_investigation_loop(
 
     # Working copy of recommendations — may grow with follow-ons
     active_recs: list[Recommendation] = list(recommendations)
-    new_ids: set[int] = set()  # IDs added as follow-ons this session
+    new_ids: set[int] = set()
 
     # Print header
     _print_header(c, account_data)
@@ -119,7 +315,9 @@ def run_investigation_loop(
 
         # Prompt
         try:
-            raw = input(f"Run action [1-{len(active_recs)}], (s)kip, (q)uit: ").strip()
+            raw = input(
+                f"Run action [1-{len(active_recs)}], (s)kip, (q)uit: "
+            ).strip()
         except (EOFError, KeyboardInterrupt):
             print("\n  Investigation complete.")
             _print_notes_path(notes_path)
@@ -144,27 +342,35 @@ def run_investigation_loop(
 
         rec = next((r for r in active_recs if r.id == action_id), None)
         if rec is None:
-            print(f"  Invalid input. Enter a number between 1 and "
-                  f"{len(active_recs)}, 's', or 'q'.")
+            print(
+                f"  Invalid input. Enter a number between 1 and "
+                f"{len(active_recs)}, 's', or 'q'."
+            )
             continue
 
-        # ── Execute action ────────────────────────────────────────────
-        print(f"\n  → Running {rec.title}...")
+        # Execute action
+        print(f"\n  -> Running {rec.title}...")
         print()
 
-        # Disk image check
-        if rec.requires_disk_image:
-            msg = ("  ✗ Requires disk image (not available in MABE bundles). "
-                   "Skipping.")
+        # Disk image / native EVTX check
+        if rec.requires_disk_image or rec.status == "NEEDS NATIVE EVTX":
+            msg = (
+                f"  [NEEDS NATIVE EVTX] {rec.tool} requires native Windows "
+                f"EVTX binary files. MABE bundles are JSON exports and cannot "
+                f"be ingested by this tool. In a real-world deployment, run "
+                f"this against the original Security.evtx from the host."
+            )
             print(msg)
-            _append_note(notes_path, rec, "N/A",
-                         "Skipped — disk image not available.", [])
+            _append_note(notes_path, rec, rec.command_template,
+                         "Skipped — requires native EVTX files not available "
+                         "in MABE JSON bundles.", [])
             print()
             continue
 
         # Execute
         output_text, actual_command = _execute_action(
-            rec, sift_output_dir, c.session_id, c.triage_card.account, client
+            rec, sift_output_dir, c.session_id,
+            c.triage_card.account, client
         )
 
         # Summarize
@@ -172,7 +378,6 @@ def run_investigation_loop(
         if summary:
             print(f"  {summary}")
         else:
-            # Fallback: print first 500 chars of raw output
             if output_text:
                 preview = output_text[:500].strip()
                 print(f"  Output preview:\n{preview}")
@@ -182,8 +387,10 @@ def run_investigation_loop(
 
         # Append to notes
         follow_ons = _detect_followons(output_text, active_recs)
-        _append_note(notes_path, rec, actual_command, summary or output_text,
-                     follow_ons)
+        _append_note(
+            notes_path, rec, actual_command,
+            summary or output_text, follow_ons
+        )
 
         # Add follow-on recommendations
         if follow_ons:
@@ -193,12 +400,10 @@ def run_investigation_loop(
                 fo.id = max_id
                 new_ids.add(max_id)
                 active_recs.append(fo)
-            print(f"  ↳ {len(follow_ons)} follow-on action(s) added "
-                  f"[marked NEW]")
+            print(
+                f"  {len(follow_ons)} follow-on action(s) added [marked NEW]"
+            )
             print()
-
-        # Clear NEW markers for recs that were just added but now exist
-        # (they stay NEW until the loop reprints)
 
 
 # ---------------------------------------------------------------------------
@@ -230,20 +435,24 @@ def _execute_mcp_action(
     account: str,
     client,
 ) -> tuple[str, str]:
-    """Execute an MCP tool call directly as a Python function."""
+    """Execute an MCP tool call directly as a Python function.
+
+    For get_account_sessions: reads from the cached all_sessions.json
+    written by Phase 1 rather than re-running full corpus detection.
+    This avoids a redundant ~13 minute corpus pass.
+    """
     func_name = rec.command_template.split(":", 1)[1]
-    actual_command = f"mcp:{func_name}(account={account!r}, " \
-                     f"sift_output_dir={sift_output_dir!r})"
+    actual_command = (
+        f"mcp:{func_name}(account={account!r}, "
+        f"sift_output_dir={sift_output_dir!r})"
+    )
 
     try:
-        # Import and call directly — avoids subprocess overhead
         if func_name == "get_account_sessions":
-            from detector_mcp.server import get_account_sessions
-            result = get_account_sessions(
+            output_text = _get_account_sessions_from_cache(
                 account=account,
                 sift_output_dir=sift_output_dir,
             )
-            output_text = json.dumps(result, indent=2)
         elif func_name == "run_batch_detection":
             from detector_mcp.server import run_batch_detection
             result = run_batch_detection(sift_output_dir=sift_output_dir)
@@ -257,6 +466,69 @@ def _execute_mcp_action(
         error_text = f"MCP call failed: {exc}"
         logger.error("MCP action %s failed: %s", func_name, exc)
         return error_text, actual_command
+
+
+def _get_account_sessions_from_cache(
+    account: str,
+    sift_output_dir: str,
+) -> str:
+    """
+    Return account session data from Phase 1 cached all_sessions.json.
+
+    Falls back to live MCP call if cache is not available.
+    """
+    cache_path = Path("/cases/mabe-investigation/analysis/all_sessions.json")
+
+    if cache_path.exists():
+        try:
+            with open(cache_path, "r", encoding="utf-8") as f:
+                all_sessions = json.load(f)
+
+            # Filter to this account
+            account_sessions = [
+                s for s in all_sessions
+                if s.get("account", "").lower() == account.lower()
+            ]
+            alerted = [s for s in account_sessions if s.get("alert_triggered")]
+            confidences = [s["confidence"] for s in alerted]
+
+            result = {
+                "account": account,
+                "total_sessions": len(account_sessions),
+                "alerted_sessions": len(alerted),
+                "confidence_range": {
+                    "min": round(min(confidences), 4) if confidences else 0.0,
+                    "max": round(max(confidences), 4) if confidences else 0.0,
+                },
+                "sessions": sorted(
+                    [
+                        {
+                            "session_id": s["session_id"],
+                            "confidence": s["confidence"],
+                            "alert_triggered": s["alert_triggered"],
+                            "mechanisms_fired": s.get("mechanisms_fired", []),
+                        }
+                        for s in account_sessions
+                    ],
+                    key=lambda x: x["confidence"],
+                    reverse=True,
+                ),
+                "source": "phase1_cache",
+            }
+            return json.dumps(result, indent=2)
+
+        except Exception as exc:
+            logger.warning(
+                "Cache read failed (%s) — falling back to live MCP call", exc
+            )
+
+    # Fallback: live MCP call
+    from detector_mcp.server import get_account_sessions
+    result = get_account_sessions(
+        account=account,
+        sift_output_dir=sift_output_dir,
+    )
+    return json.dumps(result, indent=2)
 
 
 def _execute_shell_action(rec: Recommendation) -> tuple[str, str]:
@@ -274,7 +546,7 @@ def _execute_shell_action(rec: Recommendation) -> tuple[str, str]:
         output = proc.stdout
         if proc.returncode != 0 and proc.stderr:
             output += f"\nSTDERR:\n{proc.stderr}"
-            print(f"  ⚠ Command exited with code {proc.returncode}")
+            print(f"  Command exited with code {proc.returncode}")
         return output, command
 
     except subprocess.TimeoutExpired:
@@ -303,7 +575,6 @@ def _summarize_output(
     if not client or not output_text:
         return None
 
-    # Cap input to avoid context overflow
     truncated = output_text[:4000]
 
     try:
@@ -314,8 +585,8 @@ def _summarize_output(
             messages=[{
                 "role": "user",
                 "content": (
-                    f"Summarize the output of the following forensic tool action "
-                    f"in 3-5 sentences.\n\n"
+                    f"Summarize the output of the following forensic tool "
+                    f"action in 3-5 sentences.\n\n"
                     f"Action: {action_title}\n\n"
                     f"Output:\n{truncated}"
                 ),
@@ -356,7 +627,7 @@ def _detect_followons(
 
         if rec_type == "spray_analysis":
             rec = Recommendation(
-                id=0,  # will be assigned by caller
+                id=0,
                 title=title,
                 basis="Authentication failure pattern detected in tool output",
                 tool="EvtxECmd",
@@ -412,11 +683,11 @@ def _print_header(c, account_data: dict) -> None:
     confidence = c.overall_confidence
 
     print()
-    print("═" * 60)
-    print(f"  INCIDENT REPORT — {account}")
+    print("=" * 60)
+    print(f"  INCIDENT REPORT -- {account}")
     print(f"  Severity: {severity}  |  Confidence: {confidence:.4f}")
-    print(f"  Period: {start} → {end}")
-    print("═" * 60)
+    print(f"  Period: {start} -> {end}")
+    print("=" * 60)
     print()
     print(c.triage_card.plain_english)
     print()
@@ -427,17 +698,16 @@ def _print_recommendations(
     new_ids: set[int],
 ) -> None:
     print("RECOMMENDED ACTIONS:")
-    print("─" * 60)
+    print("-" * 60)
     for rec in recs:
         new_marker = "  [NEW]" if rec.id in new_ids else ""
         status_str = f"[{rec.status}]{new_marker}"
-        # Right-align status to column 60
         title_trunc = rec.title[:46] if len(rec.title) > 46 else rec.title
         print(f"[{rec.id}] {title_trunc:<46}  {status_str}")
         print(f"    {rec.basis}")
         print(f"    Tool: {rec.tool}")
         print()
-    print("─" * 60)
+    print("-" * 60)
 
 
 def _print_notes_path(notes_path: Path) -> None:
@@ -453,17 +723,17 @@ def _init_notes(
     c,
     report_path: Path,
 ) -> None:
-    """Create investigation_notes.md if it doesn't exist."""
+    """Create investigation_notes.md if it does not exist."""
     notes_path = Path(notes_path)
     notes_path.parent.mkdir(parents=True, exist_ok=True)
 
     if notes_path.exists():
-        return  # append mode — don't overwrite existing notes
+        return
 
     now = _now_iso()
     content = (
-        f"# Investigation Notes — {c.triage_card.account} "
-        f"— {c.session_id[:8]}\n\n"
+        f"# Investigation Notes -- {c.triage_card.account} "
+        f"-- {c.session_id[:8]}\n\n"
         f"**Case opened:** {now}\n"
         f"**Session bundle:** {c.session_ref}\n"
         f"**Report:** {report_path}\n\n"
@@ -487,7 +757,7 @@ def _append_note(
     )
 
     section = (
-        f"## Action {rec.id} — {rec.title}\n\n"
+        f"## Action {rec.id} -- {rec.title}\n\n"
         f"**Executed:** {now}\n"
         f"**Tool:** {rec.tool}\n"
         f"**Basis:** {rec.basis}\n\n"

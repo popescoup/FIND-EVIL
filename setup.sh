@@ -71,6 +71,66 @@ echo "  $CASE_ROOT/exports   — data exports"
 echo "  $CASE_ROOT/reports   — incident reports and case summary"
 echo ""
 
+# ── Copy case CLAUDE.md ───────────────────────────────────────────────
+cp "$DETECTOR_ROOT/case/CLAUDE.md" "$CASE_ROOT/CLAUDE.md"
+echo "  Case CLAUDE.md: copied to $CASE_ROOT/CLAUDE.md"
+
+# ── Install detection skill ───────────────────────────────────────────
+mkdir -p /root/.claude/skills/ai-attack-detection
+cp "$DETECTOR_ROOT/skills/ai-attack-detection/SKILL.md" \
+   /root/.claude/skills/ai-attack-detection/SKILL.md
+echo "  Detection skill: installed to /root/.claude/skills/ai-attack-detection/"
+echo ""
+
+# ── Write .env file ───────────────────────────────────────────────────
+if [ -n "$ANTHROPIC_API_KEY" ]; then
+  echo "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY" > "$DETECTOR_ROOT/.env"
+  echo "  API key: written to $DETECTOR_ROOT/.env"
+else
+  echo "  WARN: ANTHROPIC_API_KEY not set — set it before running:"
+  echo "    export ANTHROPIC_API_KEY=your_key_here"
+  echo "    echo \"ANTHROPIC_API_KEY=\$ANTHROPIC_API_KEY\" > $DETECTOR_ROOT/.env"
+fi
+echo ""
+
+# ── Configure MCP server in Claude Code project config ───────────────
+echo "  Configuring MCP server for Claude Code..."
+python3 -c "
+import json, os
+
+config_path = '/root/.claude.json'
+
+# Load existing config or create minimal one
+if os.path.exists(config_path):
+    with open(config_path, 'r') as f:
+        config = json.load(f)
+else:
+    config = {}
+
+# Ensure projects key exists
+if 'projects' not in config:
+    config['projects'] = {}
+
+# Add MCP server to case project config
+case_root = '$CASE_ROOT'
+if case_root not in config['projects']:
+    config['projects'][case_root] = {}
+
+config['projects'][case_root]['mcpServers'] = {
+    'mabe-detector': {
+        'command': 'python3',
+        'args': ['/opt/detector-sift/detector_mcp/server.py'],
+        'env': {'PYTHONPATH': '/opt/detector-sift'}
+    }
+}
+
+with open(config_path, 'w') as f:
+    json.dump(config, f, indent=2)
+
+print('  MCP server: configured in /root/.claude.json')
+" 2>&1 || echo "  WARN: MCP config failed — configure manually (see README.md)"
+echo ""
+
 # ── Verify pre-generated dataset ──────────────────────────────────────
 SIFT_DIR="$DETECTOR_ROOT/mabe/output/sift"
 if [ -d "$SIFT_DIR" ]; then

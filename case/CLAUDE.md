@@ -2,12 +2,13 @@
 ## Case: MABE-IR-2026-001
 
 > **To start:** type `begin` at the Claude Code prompt.
-> The investigation runs fully autonomously from there.
+> Claude Code runs Phase 1 (detection) fully autonomously, then prints
+> the exact command for you to run Phase 2 (investigation) in your terminal.
 
 | Setting | Value |
 |---------|-------|
 | **Environment** | SANS SIFT Workstation (Ubuntu 22.04, x86-64) |
-| **Role** | Autonomous Forensic Analyst — AI-Driven Attack Investigation |
+| **Role** | Autonomous Forensic Analyst — AI-Driven Attack Detection |
 | **Dataset** | /opt/detector-sift/mabe/output/sift/ (1,425 sessions) |
 | **Detector** | /opt/detector-sift/ |
 | **Reports output** | /cases/mabe-investigation/reports/ |
@@ -23,7 +24,8 @@
   "mcpServers": {
     "mabe-detector": {
       "command": "python3",
-      "args": ["/opt/detector-sift/detector_mcp/server.py"]
+      "args": ["/opt/detector-sift/detector_mcp/server.py"],
+      "env": {"PYTHONPATH": "/opt/detector-sift"}
     }
   }
 }
@@ -33,17 +35,18 @@
 
 ## Operator Preferences
 
-- **NEVER ask questions during a task.** Run the detection and investigation
-  workflow fully autonomously. No check-ins, no confirmations between phases.
-  Pause only at the numbered action prompts in the investigation loop.
-- **No hallucinations.** Every finding must trace to a specific `event_id` or
-  signal value from the MCP server output. Never assert facts not present in
-  the structured detection data.
-- **Self-correct on failure.** If a tool fails: read stderr, hypothesize the
-  cause, correct the command, retry once. Log both attempts in notes.
+- **NEVER ask questions during a task.** Phase 1 runs fully autonomously.
+  Do not pause, check in, or ask for confirmation at any point.
+- **No hallucinations.** Every finding must trace to a specific `event_id`
+  or signal value from the MCP server output. Never assert facts not
+  present in the structured detection data.
+- **Self-correct on failure.** If a tool fails: read stderr, hypothesize
+  the cause, correct the command, retry once. Log both attempts in notes.
 - **Timestamps in UTC.**
 - **PYTHONPATH.** All Python commands must be prefixed with
   `PYTHONPATH=/opt/detector-sift` to ensure imports resolve correctly.
+- **Phase 2 is NOT run by Claude Code.** It requires a real terminal TTY
+  for interactive input. Claude Code prints the command; the analyst runs it.
 
 ---
 
@@ -61,13 +64,11 @@ Read the relevant skill before invoking any forensic tool:
 
 ---
 
-## Autonomous Investigation Workflow
-
-Execute these phases in sequence without human prompting between them.
+## Workflow
 
 ---
 
-### Phase 1 — Setup and Detection (fully autonomous)
+### Phase 1 — Detection (Claude Code runs this autonomously)
 
 1. Read `@/opt/detector-sift/skills/ai-attack-detection/SKILL.md`
 
@@ -95,161 +96,124 @@ Execute these phases in sequence without human prompting between them.
 5. Call `run_batch_detection("/opt/detector-sift/mabe/output/sift/", 0.35)`
    via the MCP server.
 
-6. Print detection summary to terminal using ═══ visual separators:
+6. If `sessions_alerted == 0`:
+   Print "No sessions exceeded threshold 0.35. Detection complete."
+   Write `/cases/mabe-investigation/reports/case_summary.md` with this
+   finding and stop.
+
+7. Build the alerted account list — one entry per unique account, sorted
+   by max confidence descending. For each account collect:
+   - account name
+   - max_confidence (highest confidence session for that account)
+   - alerted_sessions (count of alerted sessions for that account)
+   - highest_session_id (UUID of the highest-confidence session)
+   - highest_layer (e.g. "Enumeration:L3, Velocity:L3, PrivEsc:L3")
+
+8. Write a JSON file with the account list for Phase 2 to consume:
+   ```bash
+   # Write to /cases/mabe-investigation/analysis/alerted_accounts.json
+   ```
+
+9. Print the detection summary using these exact visual separators:
    ```
    ════════════════════════════════════════════════════════════
      MABE DETECTOR — DETECTION COMPLETE
      Sessions evaluated: {N}  |  Sessions alerted: {M}
+     Accounts flagged: {K}  |  Threshold: 0.35
      Confidence range: {min:.4f} — {max:.4f}
-     Threshold: 0.35
    ════════════════════════════════════════════════════════════
+
+   ALERTED ACCOUNTS:
+   ────────────────────────────────────────────────────────────
+   [ 1] joseph.davis          0.5809   1 session    all L3
+   [ 2] george.winfield       0.5791   2 sessions   all L3
+   ...
+   ────────────────────────────────────────────────────────────
    ```
 
-7. If `sessions_alerted == 0`:
-   Print "No sessions exceeded threshold 0.35. Investigation complete."
-   Write `/cases/mabe-investigation/reports/case_summary.md` with this finding.
-   Stop.
+10. Write the Phase 2 script to `/cases/mabe-investigation/run_phase2.sh`:
+    ```bash
+    cat > /cases/mabe-investigation/run_phase2.sh << 'EOF'
+    #!/bin/bash
+    PYTHONPATH=/opt/detector-sift python3 -c "
+    import json
+    from sift.investigation_loop import run_triage_queue
+    accounts = json.load(open('/cases/mabe-investigation/analysis/alerted_accounts.json'))
+    run_triage_queue(
+        alerted_accounts=accounts,
+        sift_output_dir='/opt/detector-sift/mabe/output/sift/',
+        case_analysis_dir='/cases/mabe-investigation/analysis/',
+        case_reports_dir='/cases/mabe-investigation/reports/',
+    )
+    "
+    EOF
+    chmod +x /cases/mabe-investigation/run_phase2.sh
+    ```
 
-8. Call `get_top_sessions("/opt/detector-sift/mabe/output/sift/", n=10)`
-   to build the investigation queue. Print the queue to terminal.
+11. Print the handoff message:
+    ```
+    ════════════════════════════════════════════════════════════
+      DETECTION COMPLETE.
+
+      To begin interactive investigation, open a new terminal and run:
+
+          bash /cases/mabe-investigation/run_phase2.sh
+
+    ════════════════════════════════════════════════════════════
+    ```
+
+12. Stop. Do not attempt to run Phase 2.
 
 ---
 
-### Phase 2 — Session Investigation (interactive at action prompts)
+### Phase 2 — Interactive Investigation (analyst runs this in terminal)
 
-For each session in the top-sessions queue (highest confidence first):
+**This phase is NOT run by Claude Code.** In a separate SSH terminal, run:
 
-1. Call `detect_session(session_path, sift_output_dir)` for full signal
-   breakdown. `session_path` is:
-   `/opt/detector-sift/mabe/output/sift/session_{session_id}/`
-
-2. Call `get_account_sessions(account, sift_output_dir)` for cross-session
-   context.
-
-3. Generate incident report using reporter_v2:
-   ```bash
-   PYTHONPATH=/opt/detector-sift python3 -c "
-   import json, sys
-   sys.path.insert(0, '/opt/detector-sift')
-   from sift.runner import DetectionRunner
-   from sift.ingest import load_and_normalize, iter_normalized_sessions
-   from sift.reporter_v2 import render_report_v2
-   from core.recommendations import generate_recommendations
-   from pathlib import Path
-
-   SIFT_DIR = '/opt/detector-sift/mabe/output/sift/'
-   SESSION_ID = '{session_id}'
-   ACCOUNT = '{account}'
-   REPORT_DIR = '/cases/mabe-investigation/reports/'
-
-   session = load_and_normalize(SIFT_DIR + 'session_' + SESSION_ID)
-   all_sessions = list(iter_normalized_sessions(SIFT_DIR, skip_empty=True))
-   runner = DetectionRunner(alert_threshold=0.35)
-   result = runner.run_single(session, all_sessions)
-
-   account_data = {account_data_json}
-
-   recs = generate_recommendations(
-       correlation_output=result.correlation,
-       session_bundle_path=SIFT_DIR + 'session_' + SESSION_ID,
-       session_id=SESSION_ID,
-       account=ACCOUNT,
-       account_session_count=account_data.get('alerted_sessions', 1),
-       case_analysis_dir='/cases/mabe-investigation/analysis/',
-   )
-
-   report_path = Path(REPORT_DIR) / f'report_{SESSION_ID[:8]}.md'
-   render_report_v2(result, recs, account_data, report_path)
-   print(f'Report written: {report_path}')
-   "
-   ```
-   Replace `{session_id}`, `{account}`, and `{account_data_json}` with
-   values from the MCP detect_session and get_account_sessions responses.
-
-4. Enter the investigation loop:
-   ```bash
-   PYTHONPATH=/opt/detector-sift python3 -c "
-   import sys
-   sys.path.insert(0, '/opt/detector-sift')
-   from sift.runner import DetectionRunner
-   from sift.ingest import load_and_normalize, iter_normalized_sessions
-   from sift.investigation_loop import run_investigation_loop
-   from core.recommendations import generate_recommendations
-   from pathlib import Path
-
-   SIFT_DIR = '/opt/detector-sift/mabe/output/sift/'
-   SESSION_ID = '{session_id}'
-   ACCOUNT = '{account}'
-
-   session = load_and_normalize(SIFT_DIR + 'session_' + SESSION_ID)
-   all_sessions = list(iter_normalized_sessions(SIFT_DIR, skip_empty=True))
-   runner = DetectionRunner(alert_threshold=0.35)
-   result = runner.run_single(session, all_sessions)
-
-   account_data = {account_data_json}
-
-   recs = generate_recommendations(
-       correlation_output=result.correlation,
-       session_bundle_path=SIFT_DIR + 'session_' + SESSION_ID,
-       session_id=SESSION_ID,
-       account=ACCOUNT,
-       account_session_count=account_data.get('alerted_sessions', 1),
-       case_analysis_dir='/cases/mabe-investigation/analysis/',
-   )
-
-   run_investigation_loop(
-       session_result=result,
-       recommendations=recs,
-       report_path=Path('/cases/mabe-investigation/reports/report_{session_id_8}.md'),
-       notes_path=Path('/cases/mabe-investigation/analysis/notes_{session_id_8}.md'),
-       sift_output_dir=SIFT_DIR,
-       account_data=account_data,
-   )
-   "
-   ```
-
-5. After the loop exits (analyst typed 'q' or 's'), proceed to the next
-   session in the queue without prompting.
-
----
-
-### Phase 3 — Case Summary (fully autonomous)
-
-After all sessions in the queue have been investigated, write
-`/cases/mabe-investigation/reports/case_summary.md`:
-
-```markdown
-# Case Summary — MABE-IR-2026-001
-Generated: {timestamp UTC}
-
-## Overview
-{N} sessions investigated across {M} unique accounts.
-Detection ran across 1,425 total sessions; {alerted} exceeded threshold 0.35.
-
-## Compromised Accounts
-| Account | Sessions | Max Confidence | Mechanisms |
-|---------|---------|---------------|------------|
-{one row per alerted account, sorted by max confidence descending,
-derived from get_account_sessions output — no LLM}
-
-## Key Findings
-{3-5 bullet points derived deterministically from aggregated signal data.
-Example: "All {N} alerted accounts showed L3 detection on all three
-mechanisms — velocity, enumeration, and privilege escalation chaining."}
-
-## Organizational Recommendations
-{Deterministic — no LLM. Apply the same decision tree logic as per-session
-recommendations, aggregated across all alerted accounts.}
-1. Rotate credentials for all {N} alerted accounts immediately.
-2. {Second action based on dominant mechanism signals}
-3. {Third action}
-
-## Investigation Notes
-Full notes for each investigated session:
-{list of /cases/mabe-investigation/analysis/notes_{sid8}.md paths}
+```bash
+bash /cases/mabe-investigation/run_phase2.sh
 ```
 
-Derive all values from aggregated MCP tool output. No LLM for this section.
+The triage queue will display the alerted account list and prompt:
+
+```
+Investigate accounts [1-15], enter numbers (e.g. 1,2,5), (a)ll, or (q)uit:
+```
+
+Enter the account numbers you want to investigate. For each selected
+account the loop will:
+1. Run detection for the highest-confidence session
+2. Generate an incident report with LLM narrative
+3. Present recommended actions with numbered prompts
+4. Execute tools, summarize output, detect follow-on actions
+5. Append findings to investigation_notes.md
+6. Move to the next selected account
+
+Type `q` at any action prompt to finish that account and move to the next.
+
+---
+
+### Phase 3 — Case Summary (Claude Code runs this after Phase 2)
+
+After the analyst finishes Phase 2 and Phase 2 exits, return to Claude Code
+and type:
+
+```
+write case summary
+```
+
+Claude Code will read the generated reports and notes from
+`/cases/mabe-investigation/` and write
+`/cases/mabe-investigation/reports/case_summary.md` covering:
+
+- Overview: total sessions, alerted sessions, accounts flagged
+- Compromised accounts table (sorted by max confidence)
+- Key findings (3-5 bullets, derived from aggregated signal data, no LLM)
+- Organizational recommendations (deterministic decision tree, no LLM)
+- Links to all investigation notes
+
+Derive all values from the report files and JSON artifacts in
+`/cases/mabe-investigation/analysis/`. No LLM for this section.
 
 ---
 
@@ -261,8 +225,8 @@ If any step produces an error:
 2. Check: is it a path issue? (`PYTHONPATH=/opt/detector-sift` set?)
 3. Check: is it an import issue? (run `--test` on MCP server)
 4. Correct and retry once
-5. If retry fails: log the failure in investigation notes and continue
-   to the next session — never block the full run on one failure
+5. If retry fails: log the failure and continue — never block the full
+   run on one failure
 
 ---
 
@@ -270,6 +234,7 @@ If any step produces an error:
 
 | Output | Path |
 |--------|------|
+| Alerted accounts JSON | `/cases/mabe-investigation/analysis/alerted_accounts.json` |
 | Incident reports | `/cases/mabe-investigation/reports/report_{sid8}.md` |
 | Case summary | `/cases/mabe-investigation/reports/case_summary.md` |
 | Investigation notes | `/cases/mabe-investigation/analysis/notes_{sid8}.md` |
