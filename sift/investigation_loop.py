@@ -435,12 +435,7 @@ def _execute_mcp_action(
     account: str,
     client,
 ) -> tuple[str, str]:
-    """Execute an MCP tool call directly as a Python function.
-
-    For get_account_sessions: reads from the cached all_sessions.json
-    written by Phase 1 rather than re-running full corpus detection.
-    This avoids a redundant ~13 minute corpus pass.
-    """
+    """Execute an MCP tool call directly as a Python function."""
     func_name = rec.command_template.split(":", 1)[1]
     actual_command = (
         f"mcp:{func_name}(account={account!r}, "
@@ -449,10 +444,12 @@ def _execute_mcp_action(
 
     try:
         if func_name == "get_account_sessions":
-            output_text = _get_account_sessions_from_cache(
+            from detector_mcp.server import get_account_sessions
+            result = get_account_sessions(
                 account=account,
                 sift_output_dir=sift_output_dir,
             )
+            output_text = json.dumps(result, indent=2)
         elif func_name == "run_batch_detection":
             from detector_mcp.server import run_batch_detection
             result = run_batch_detection(sift_output_dir=sift_output_dir)
@@ -466,69 +463,6 @@ def _execute_mcp_action(
         error_text = f"MCP call failed: {exc}"
         logger.error("MCP action %s failed: %s", func_name, exc)
         return error_text, actual_command
-
-
-def _get_account_sessions_from_cache(
-    account: str,
-    sift_output_dir: str,
-) -> str:
-    """
-    Return account session data from Phase 1 cached all_sessions.json.
-
-    Falls back to live MCP call if cache is not available.
-    """
-    cache_path = Path("/cases/mabe-investigation/analysis/all_sessions.json")
-
-    if cache_path.exists():
-        try:
-            with open(cache_path, "r", encoding="utf-8") as f:
-                all_sessions = json.load(f)
-
-            # Filter to this account
-            account_sessions = [
-                s for s in all_sessions
-                if s.get("account", "").lower() == account.lower()
-            ]
-            alerted = [s for s in account_sessions if s.get("alert_triggered")]
-            confidences = [s["confidence"] for s in alerted]
-
-            result = {
-                "account": account,
-                "total_sessions": len(account_sessions),
-                "alerted_sessions": len(alerted),
-                "confidence_range": {
-                    "min": round(min(confidences), 4) if confidences else 0.0,
-                    "max": round(max(confidences), 4) if confidences else 0.0,
-                },
-                "sessions": sorted(
-                    [
-                        {
-                            "session_id": s["session_id"],
-                            "confidence": s["confidence"],
-                            "alert_triggered": s["alert_triggered"],
-                            "mechanisms_fired": s.get("mechanisms_fired", []),
-                        }
-                        for s in account_sessions
-                    ],
-                    key=lambda x: x["confidence"],
-                    reverse=True,
-                ),
-                "source": "phase1_cache",
-            }
-            return json.dumps(result, indent=2)
-
-        except Exception as exc:
-            logger.warning(
-                "Cache read failed (%s) — falling back to live MCP call", exc
-            )
-
-    # Fallback: live MCP call
-    from detector_mcp.server import get_account_sessions
-    result = get_account_sessions(
-        account=account,
-        sift_output_dir=sift_output_dir,
-    )
-    return json.dumps(result, indent=2)
 
 
 def _execute_shell_action(rec: Recommendation) -> tuple[str, str]:
@@ -702,8 +636,7 @@ def _print_recommendations(
     for rec in recs:
         new_marker = "  [NEW]" if rec.id in new_ids else ""
         status_str = f"[{rec.status}]{new_marker}"
-        title_trunc = rec.title[:46] if len(rec.title) > 46 else rec.title
-        print(f"[{rec.id}] {title_trunc:<46}  {status_str}")
+        print(f"[{rec.id}] {rec.title}  {status_str}")
         print(f"    {rec.basis}")
         print(f"    Tool: {rec.tool}")
         print()

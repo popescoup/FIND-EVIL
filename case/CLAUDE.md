@@ -114,7 +114,44 @@ Read the relevant skill before invoking any forensic tool:
    # Write to /cases/mabe-investigation/analysis/alerted_accounts.json
    ```
 
-9. Print the detection summary using these exact visual separators:
+9. Write `all_sessions.json` — the full per-session result cache used by
+   Phase 2 to avoid re-running corpus detection for MCP tool calls:
+   ```bash
+   PYTHONPATH=/opt/detector-sift python3 -c "
+   import json, sys
+   sys.path.insert(0, '/opt/detector-sift')
+   from sift.runner import DetectionRunner
+
+   runner = DetectionRunner(alert_threshold=0.35)
+   result = runner.run('/opt/detector-sift/mabe/output/sift/')
+
+   records = [
+       {
+           'session_id':   r.correlation.session_id,
+           'account':      r.correlation.triage_card.account,
+           'confidence':   r.correlation.overall_confidence,
+           'alert_triggered': r.correlation.alert_triggered,
+           'mechanisms_fired': r.correlation.mechanisms_fired,
+           'highest_layer_per_mechanism': r.correlation.highest_layer_per_mechanism,
+           'data_window': {
+               'start': r.correlation.triage_card.time_window.start,
+               'end':   r.correlation.triage_card.time_window.end,
+           },
+       }
+       for r in result.results
+   ]
+
+   with open('/cases/mabe-investigation/analysis/all_sessions.json', 'w') as f:
+       json.dump(records, f, indent=2)
+   print(f'all_sessions.json written ({len(records)} records)')
+   "
+   ```
+   Note: this re-uses the same DetectionRunner call as step 5. If you
+   already have the DetectionResult in memory from step 5, derive
+   all_sessions.json from that result directly rather than running
+   detection again.
+
+10. Print the detection summary using these exact visual separators:
    ```
    ════════════════════════════════════════════════════════════
      MABE DETECTOR — DETECTION COMPLETE
@@ -131,7 +168,7 @@ Read the relevant skill before invoking any forensic tool:
    ────────────────────────────────────────────────────────────
    ```
 
-10. Write the Phase 2 script to `/cases/mabe-investigation/run_phase2.sh`:
+11. Write the Phase 2 script to `/cases/mabe-investigation/run_phase2.sh`:
     ```bash
     cat > /cases/mabe-investigation/run_phase2.sh << 'EOF'
     #!/bin/bash
@@ -150,7 +187,7 @@ Read the relevant skill before invoking any forensic tool:
     chmod +x /cases/mabe-investigation/run_phase2.sh
     ```
 
-11. Print the handoff message:
+12. Print the handoff message:
     ```
     ════════════════════════════════════════════════════════════
       DETECTION COMPLETE.
@@ -162,7 +199,7 @@ Read the relevant skill before invoking any forensic tool:
     ════════════════════════════════════════════════════════════
     ```
 
-12. Stop. Do not attempt to run Phase 2.
+13. Stop. Do not attempt to run Phase 2.
 
 ---
 
