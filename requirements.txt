@@ -1,17 +1,24 @@
-# MABE Detector — SIFT dependencies
-# ===================================
-# Install from detector-sift/:
+# MABE Detector SIFT — unified requirements
+# ==========================================
+# Install from /opt/detector-sift/:
 #   pip install -r requirements.txt
 #
-# Optional — LLM narrative enhancement:
-#   pip install anthropic
-# Requires ANTHROPIC_API_KEY environment variable.
-# The detector runs fully without it; LLM narrative
-# is a cosmetic enhancement enabled via --llm-narrative.
+# Covers: detector core, MABE generator, MCP server, agentic layer
 
-# Core — required for all modes
+# Core detection — required for all modes
 pyyaml>=6.0
 
-# Optional — LLM narrative enhancement
-# Uncomment to install, or install separately:
-# anthropic>=0.40.0
+# Graph / simulation (MABE generator)
+networkx>=3.2
+
+# Numeric computation (velocity model, trimmed statistics)
+numpy>=1.26
+
+# Environment variable loading (.env support)
+python-dotenv>=1.0
+
+# LLM narrative enhancement + MCP tool invocation
+anthropic>=0.40
+
+# MCP server (agentic layer)
+mcp>=1.0
