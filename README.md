@@ -1,4 +1,4 @@
-# MABE Detector SIFT — AI-Driven Attack Detection
+# MAD — AI-Driven Attack Detection
 ## SANS Find Evil Hackathon 2026 Submission
 
 ---
