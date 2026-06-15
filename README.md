@@ -5,7 +5,7 @@
 
 ## What this is
 
-MABE Detector is a behavioral detection system for AI-driven cyberattacks —
+The Malicious Agent Detector is a behavioral detection system for AI-driven cyberattacks —
 a class of threat with no public dataset and no existing detection tooling as
 of May 2026. It detects the three signatures that distinguish autonomous AI
 agents from human operators: machine-speed inter-event timing (47–158x faster
@@ -32,7 +32,7 @@ MABE Generator
     session_manifest.json
         │
         ▼
-MABE Detector Core
+MAD Core
   sift/ingest.py        — EVTX → normalized events
   core/mechanisms/      — velocity, enumeration, priv_escalation
   core/baseline.py      — unsupervised per-account baselines
@@ -272,8 +272,8 @@ evaluation happens separately via post-hoc cross-reference.
 ```bibtex
 @software{mabe_detector_2026,
   author = {Popescu, Luca},
-  title  = {MABE Detector SIFT: Autonomous AI-Driven Attack Detection},
+  title  = {MAD: SIFT Malicious Agent Detection},
   year   = {2026},
-  url    = {https://github.com/popescoup/Malicious-Agent-Behavior-Emulator}
+  url    = {https://github.com/popescoup/FIND-EVIL}
 }
 ```

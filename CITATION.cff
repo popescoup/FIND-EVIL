@@ -1,0 +1,86 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "MAD: SIFT Malicious Agent Detection"
+abstract: >
+  MAD is a complete forensic detection stack for AI-driven cyberattacks on
+  the SANS SIFT Workstation. It consists of three integrated components:
+  MABE (Malicious Agent Behavior Emulator), a synthetic dataset generator
+  producing labeled Windows Security Event and Sysmon logs that emulate
+  autonomous AI-driven network attacks; MABE Detector, a three-mechanism
+  unsupervised behavioral detection system (velocity, enumeration, privilege
+  escalation chaining) validated at 100% precision and recall against a
+  1,425-session dataset; and an agentic investigation layer built on
+  Claude Code and a custom MCP server that autonomously investigates flagged
+  sessions using Protocol SIFT tools and produces CISO-readable forensic reports.
+authors:
+  - family-names: Popescu
+    given-names: Luca
+    email: popescoup@gmail.com
+repository-code: "https://github.com/popescoup/FIND-EVIL"
+url: "https://github.com/popescoup/FIND-EVIL"
+license: MIT
+version: "1.0.0"
+date-released: "2026-06-15"
+keywords:
+  - incident response
+  - forensics
+  - AI-driven attacks
+  - behavioral detection
+  - SANS SIFT
+  - Protocol SIFT
+  - MCP
+  - Claude Code
+  - autonomous agents
+  - cybersecurity
+references:
+  - type: report
+    title: "Countering China's Cyber Threat: An Analysis of AI-Enabled
+            Cyber Operations (GTG-1002)"
+    authors:
+      - name: "Anthropic"
+    year: 2025
+    month: 11
+    notes: "Empirical basis for velocity, enumeration, and credential
+            harvesting behavioral parameters"
+  - type: report
+    title: "AI Agent Velocity Study: Autonomous vs Human Operator Speed"
+    authors:
+      - family-names: Lee
+        given-names: Rob
+    institution:
+      name: SANS Institute
+    year: 2025
+    month: 12
+    notes: "47-158x velocity multiplier; human baseline timing parameters"
+  - type: report
+    title: "AI-Assisted ICS Attack — Mexican Water Utility"
+    authors:
+      - name: "Dragos"
+    year: 2026
+    month: 5
+    notes: "Scope expansion behavioral parameter; OT-adjacent probing"
+  - type: article
+    title: "Autonomous Cyber Attack Agents: Dead-end Backtracking and
+            File-based Credential Discovery"
+    authors:
+      - name: "Anonymous"
+    journal: "arXiv"
+    year: 2023
+    notes: "arXiv:2310.11409 — backtracking and file-based credential discovery"
+  - type: article
+    title: "Multi-hop Credential Chaining and AS-REP Roasting in
+            Autonomous Penetration Testing"
+    authors:
+      - name: "Anonymous"
+    journal: "arXiv"
+    year: 2025
+    notes: "arXiv:2502.04227 — credential chaining, assumed-breach framing"
+  - type: article
+    title: "LMDG: Learned Multi-Distribution Generator for Network
+            Intrusion Detection"
+    authors:
+      - name: "Anonymous"
+    journal: "arXiv"
+    year: 2025
+    notes: "arXiv:2508.02942 — benign behavioral model, three-engine architecture"
