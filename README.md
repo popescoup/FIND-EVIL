@@ -1,4 +1,4 @@
-# MAD — AI-Driven Attack Detection
+# MAD (Malicious Agent Detection) — AI-Driven Attack Detection
 ## SANS Find Evil Hackathon 2026 Submission
 
 ---
