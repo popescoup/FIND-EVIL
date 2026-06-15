@@ -1,0 +1,17 @@
+[phase1] DetectionRunner(alert_threshold=0.35).run('/opt/detector-sift/mabe/output/sift/')
+[phase1] single O(n^2) run; expect ~800s ...
+[phase1] run complete in 895.6s
+{
+  "case": "MABE-IR-2026-001",
+  "input_dir": "/opt/detector-sift/mabe/output/sift/",
+  "threshold": 0.35,
+  "run_seconds": 895.6,
+  "sessions_evaluated": 1425,
+  "sessions_alerted": 75,
+  "accounts_flagged": 15,
+  "skipped_sessions": [],
+  "confidence_min": 0.0,
+  "confidence_max": 0.5809,
+  "all_three_l3_sessions": 63
+}
+[phase1] wrote calibration.json, all_sessions.json, alerted_accounts.json, detection_meta.json
