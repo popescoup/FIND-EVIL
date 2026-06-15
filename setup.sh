@@ -17,6 +17,8 @@ echo ""
 # ── Python dependencies ───────────────────────────────────────────────
 echo "[1/4] Installing Python dependencies..."
 pip install -r "$DETECTOR_ROOT/requirements.txt" --quiet
+# Explicitly ensure anthropic is installed — required for LLM narrative
+pip install anthropic --quiet
 echo "  Dependencies: OK"
 echo ""
 
@@ -147,8 +149,8 @@ echo ""
 echo "════════════════════════════════════════════════════════════"
 echo "  Setup complete."
 echo ""
-echo "  Next steps:"
-echo "    export ANTHROPIC_API_KEY=your_key_here"
+echo "  Next step:"
 echo "    cd $CASE_ROOT && claude"
+echo "    Type 'begin' at the Claude Code prompt."
 echo "════════════════════════════════════════════════════════════"
 echo ""
